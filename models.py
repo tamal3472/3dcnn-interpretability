@@ -30,20 +30,122 @@ import torchsample
 
 # -------------------------- PyTorch models ---------------------------------
 
+class ClassificationModel3DVIN(nn.Module):
+    """The model we use in the paper."""
+    
+    def __init__(self, dropout=0, dropout2=0):
+        nn.Module.__init__(self)
+        self.Conv_1 = nn.Conv3d(1, 8, 3)
+        self.Conv_1_bn = nn.InstanceNorm3d(8) 
+        self.Conv_2 = nn.Conv3d(8, 16, 3)
+        self.Conv_2_bn = nn.InstanceNorm3d(16)
+        self.Conv_3 = nn.Conv3d(16, 32, 3)
+        self.Conv_3_bn = nn.InstanceNorm3d(32)
+        self.Conv_4 = nn.Conv3d(32, 64, 3)
+        self.Conv_4_bn = nn.InstanceNorm3d(64)
+        self.dense_1 = nn.Linear(2304, 128)
+        self.dense_2 = nn.Linear(128, 64)
+        self.dense_3 = nn.Linear(64, 2)  #1
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout2)
+        
+    def forward(self, x):
+        x = self.relu(self.Conv_1_bn(self.Conv_1(x)))
+        x = F.max_pool3d(x, 2)
+        x = self.relu(self.Conv_2_bn(self.Conv_2(x)))
+        x = F.max_pool3d(x, 3)
+        x = self.relu(self.Conv_3_bn(self.Conv_3(x)))
+        x = F.max_pool3d(x, 2)
+        x = self.relu(self.Conv_4_bn(self.Conv_4(x)))
+        x = F.max_pool3d(x, 3)
+        x = x.view(x.size(0), -1)
+        x = self.dropout(x)
+        x = self.relu(self.dense_1(x))
+        x = self.dropout2(x)
+        x = self.relu(self.dense_2(x))
+        x = self.dense_3(x)
+        
+        # Note that no sigmoid is applied here, because the network is used in combination with BCEWithLogitsLoss,
+        # which applies sigmoid and BCELoss at the same time to make it numerically stable.
+            
+        return x
+
+
+
+# -------------------------- PyTorch models ---------------------------------
+
+class ClassificationModel3DUpdatedImproved(nn.Module):
+    """Improved 3D MRI Classification Model with InstanceNorm, wider layers, and optional age input."""
+    
+    def __init__(self, dropout=0.3, dropout2=0.3, use_age=False):
+        nn.Module.__init__(self)
+        self.use_age = use_age
+
+        # Conv layers with instance normalization
+        self.Conv_1 = nn.Conv3d(1, 16, kernel_size=3, padding=1)
+        self.Conv_1_bn = nn.InstanceNorm3d(16)
+
+        self.Conv_2 = nn.Conv3d(16, 32, kernel_size=3, padding=1)
+        self.Conv_2_bn = nn.InstanceNorm3d(32)
+
+        self.Conv_3 = nn.Conv3d(32, 64, kernel_size=3, padding=1)
+        self.Conv_3_bn = nn.InstanceNorm3d(64)
+
+        self.Conv_4 = nn.Conv3d(64, 128, kernel_size=3, padding=1)
+        self.Conv_4_bn = nn.InstanceNorm3d(128)
+
+        # # Fully connected layers
+        # self.feature_dim = 128 * 11 * 10 * 10  # Based on input 174x174x190 after 4 MaxPool3d(2)
+        # self.age_dim = 1 if self.use_age else 0
+        self.dense_1 = nn.Linear(140000, 256)
+        self.dense_2 = nn.Linear(256, 128)
+        self.dense_3 = nn.Linear(128, 2)  # Binary classification
+
+        # Dropout and activation
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout2)
+
+    def forward(self, x, age=None):
+        x = self.relu(self.Conv_1_bn(self.Conv_1(x)))
+        x = F.max_pool3d(x, kernel_size=2)
+
+        x = self.relu(self.Conv_2_bn(self.Conv_2(x)))
+        x = F.max_pool3d(x, kernel_size=2)
+
+        x = self.relu(self.Conv_3_bn(self.Conv_3(x)))
+        x = F.max_pool3d(x, kernel_size=2)
+
+        x = self.relu(self.Conv_4_bn(self.Conv_4(x)))
+        x = F.max_pool3d(x, kernel_size=2)
+
+        x = x.view(x.size(0), -1)
+
+        x = self.dropout(x)
+        x = self.relu(self.dense_1(x))
+        x = self.dropout2(x)
+        x = self.relu(self.dense_2(x))
+        x = self.dense_3(x)
+
+        # Note: No sigmoid since BCEWithLogitsLoss is used
+        return x
+# -------------------------- PyTorch models ---------------------------------
+
 class ClassificationModel3D(nn.Module):
     """The model we use in the paper."""
     
     def __init__(self, dropout=0, dropout2=0):
         nn.Module.__init__(self)
         self.Conv_1 = nn.Conv3d(1, 8, 3)
-        self.Conv_1_bn = nn.BatchNorm3d(8)
+        self.Conv_1_bn = nn.BatchNorm3d(8) 
         self.Conv_2 = nn.Conv3d(8, 16, 3)
         self.Conv_2_bn = nn.BatchNorm3d(16)
         self.Conv_3 = nn.Conv3d(16, 32, 3)
         self.Conv_3_bn = nn.BatchNorm3d(32)
         self.Conv_4 = nn.Conv3d(32, 64, 3)
         self.Conv_4_bn = nn.BatchNorm3d(64)
-        self.dense_1 = nn.Linear(5120, 128)
+        self.dense_1 = nn.Linear(2304, 128)
         self.dense_2 = nn.Linear(128, 64)
         self.dense_3 = nn.Linear(64, 2)  #1
         self.relu = nn.ReLU()
@@ -149,7 +251,7 @@ def build_model():
     #callbacks.append(torchsample.callbacks.ModelCheckpoint('logs/2_ClassificationModel3D_1.5T-and-3T-combined_dropout-0.8', 'epoch_{epoch}-loss_{loss}-val_loss_{val_loss}', 'val_loss', save_best_only=True, max_save=1))
 
     trainer = torchsample.modules.ModuleTrainer(net)
-    #trainer.compile(loss=loss_function, optimizer=optimizer, metrics=[BinaryAccuracyWithLogits()], callbacks=callbacks)
+    # trainer.compile(loss=loss_function, optimizer=optimizer, metrics=[BinaryAccuracyWithLogits()], callbacks=callbacks)
     trainer.compile(loss=loss_function, optimizer=optimizer, metrics=[CategoricalAccuracyWithLogits()], callbacks=callbacks)
 
     if torch.cuda.is_available():

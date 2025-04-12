@@ -8,7 +8,7 @@ import pandas as pd
 
 import os
 import utils
-from tqdm import tqdm_notebook
+from tqdm.auto import tqdm
 from sklearn.model_selection import train_test_split
 import multiprocessing
 import json
@@ -25,7 +25,7 @@ from tabulate import tabulate
 
 
 # Binary brain mask used to cut out the skull.
-mask = utils.load_nifti('data/binary_brain_mask.nii.gz')
+# mask = utils.load_nifti('binary_brain_mask.nii.gz')
 
 
 # ------------------------- ADNI data tables -----------------------------------
@@ -133,8 +133,11 @@ class ADNIDataset(Dataset):
         self.num_targets = 1
 
         # Default values. Should be set via fit_normalization.
-        self.mean = 0
-        self.std = 1
+        # self.mean = 0
+        # self.std = 1
+
+        # self.mean = np.load("x_mean1.npy")
+        # self.std = np.load("x_std1.npy")
 
     def __len__(self):
         return len(self.filenames)
@@ -143,10 +146,10 @@ class ADNIDataset(Dataset):
         """Return the image as a numpy array and the label."""
         label = self.labels[idx]
 
-        struct_arr = utils.load_nifti(self.filenames[idx], mask=self.mask)
+        struct_arr = utils.load_nifti(self.filenames[idx], mask=None)
         # TDOO: Try normalizing each image to mean 0 and std 1 here.
         #struct_arr = (struct_arr - struct_arr.mean()) / (struct_arr.std() + 1e-10)
-        struct_arr = (struct_arr - self.mean) / (self.std + 1e-10)  # prevent 0 division by adding small factor
+        # struct_arr = (struct_arr - self.mean) / (self.std + 1e-10)  # prevent 0 division by adding small factor
         struct_arr = struct_arr[None]  # add (empty) channel dimension
         struct_arr = torch.FloatTensor(struct_arr)
 
@@ -157,18 +160,18 @@ class ADNIDataset(Dataset):
 
     def image_shape(self):
         """The shape of the MRI images."""
-        return utils.load_nifti(self.filenames[0], mask=mask).shape
+        return utils.load_nifti(self.filenames[0], mask=None).shape
 
-    def fit_normalization(self, num_sample=None, show_progress=False):
+    def fit_normalization(self, num_sample=None, show_progress=False, percentile_clip=True):
         """
         Calculate the voxel-wise mean and std across the dataset for normalization.
         
         Args:
-            num_sample (int or None): If None (default), calculate the values across the complete dataset, 
+            num_sample (int or None): If None (default), calculate across complete dataset, 
                                       otherwise sample a number of images.
-            show_progress (bool): Show a progress bar during the calculation."
+            show_progress (bool): Show a progress bar during calculation.
+            percentile_clip (bool): Apply percentile-based clipping to handle outliers.
         """
-            
         if num_sample is None:
             num_sample = len(self)
 
@@ -177,14 +180,37 @@ class ADNIDataset(Dataset):
 
         sampled_filenames = np.random.choice(self.filenames, num_sample, replace=False)
         if show_progress:
-            sampled_filenames = tqdm_notebook(sampled_filenames)
+            sampled_filenames = tqdm(sampled_filenames)
 
         for i, filename in enumerate(sampled_filenames):
-            struct_arr = utils.load_nifti(filename, mask=mask)
+            struct_arr = utils.load_nifti(filename, mask=None)
+            
+            # # Optional: Handle potential intensity scaling issues
+            # if percentile_clip:
+            #     # Clip values between 1st and 99th percentiles to remove extreme outliers
+            #     lower, upper = np.percentile(struct_arr, [1, 99])
+            #     struct_arr = np.clip(struct_arr, lower, upper)
+            
+            # Ensure non-zero variance to prevent division by zero
+            if np.std(struct_arr) == 0:
+                print(f"Warning: Zero variance in image {filename}")
+                continue
+            
             all_struct_arr[i] = struct_arr
 
-        self.mean = all_struct_arr.mean(0)
-        self.std = all_struct_arr.std(0)
+        # Robust mean and standard deviation calculation
+        x_mean= np.mean(all_struct_arr, axis=0)
+        np.save("x_mean1.npy", x_mean)
+        # if non_zero_count > 0:
+        #     print(f"There are {non_zero_count} non-zero values in the mean array.")
+        x_std= np.std(all_struct_arr, axis=0)
+        np.save("x_std1.npy", x_std)
+        # if non_zero_count > 0:
+        #     print(f"There are {non_zero_count} non-zero values in the mean array.")
+        print(f"mean {x_mean}, std {x_std}")
+        self.mean = x_mean
+        self.std = x_std
+    
 
     def get_raw_image(self, idx):
         """Return the raw image at index idx (i.e. not normalized, no color channel, no transform."""
@@ -210,7 +236,8 @@ def print_df_stats(df, df_train, df_val):
 
 
 # TODO: Rename *_val to *_test.
-def build_datasets(df, patients_train, patients_val, print_stats=True, normalize=True):
+# def build_datasets(df, patients_train, patients_val, print_stats=True, normalize=True):
+def build_datasets(train_filenames, train_labels, val_filenames, val_labels,  normalize=True):
     """
     Build PyTorch datasets based on a data table and a patient-wise train-test split.
     
@@ -225,27 +252,28 @@ def build_datasets(df, patients_train, patients_val, print_stats=True, normalize
         The train and val dataset.
     """
     # Compile train and val dfs based on patients.
-    df_train = df[df.apply(lambda row: row['PTID'] in patients_train, axis=1)]
-    df_val = df[df.apply(lambda row: row['PTID'] in patients_val, axis=1)]
+    # df_train = df[df.apply(lambda row: row['PTID'] in patients_train, axis=1)]
+    # df_val = df[df.apply(lambda row: row['PTID'] in patients_val, axis=1)]
 
-    if print_stats:
-        print_df_stats(df, df_train, df_val)
+    # if print_stats:
+    #     print_df_stats(df, df_train, df_val)
 
     # Extract filenames and labels from dfs.
-    train_filenames = np.array(df_train['filepath'])
-    val_filenames = np.array(df_val['filepath'])
-    train_labels = np.array(df_train['DX'] == 'Dementia', dtype=int)#[:, None]
-    val_labels = np.array(df_val['DX'] == 'Dementia', dtype=int)#[:, None]
+    # train_filenames = np.array(df_train['filepath'])
+    # val_filenames = np.array(df_val['filepath'])
+    # train_labels = np.array(df_train['DX'] == 'Dementia', dtype=int)#[:, None]
+    # val_labels = np.array(df_val['DX'] == 'Dementia', dtype=int)#[:, None]
 
-    train_dataset = ADNIDataset(train_filenames, train_labels, mask=mask)
-    val_dataset = ADNIDataset(val_filenames, val_labels, mask=mask)
+    train_dataset = ADNIDataset(train_filenames, train_labels, mask=None)
+    val_dataset = ADNIDataset(val_filenames, val_labels, mask=None)
+    # test_dataset = ADNIDataset(test_filenames, test_labels, mask=None)
 
     # TODO: Maybe normalize each scan first, so that they are on a common scale.
     # TODO: Save these values to file together with the model.
     # TODO: Sample over more images.
     if normalize:
         print('Calculating mean and std for normalization:')
-        train_dataset.fit_normalization(200, show_progress=True)
+        train_dataset.fit_normalization(300, show_progress=True)
         val_dataset.mean, val_dataset.std = train_dataset.mean, train_dataset.std
     else:
         print('Dataset is not normalized, this could dramatically decrease performance')
